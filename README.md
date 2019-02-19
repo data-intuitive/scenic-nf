@@ -1,3 +1,27 @@
+# Fork
+
+This fork uses [Portash](https://github.com/data-intuitive/Portash) as the 
+entrypoint for the container. The [original pySCENIC 
+image](https://hub.docker.com/r/aertslab/pyscenic) has therefore been adapted 
+to include Portash and its dependencies.
+
+As a result, the 3 steps in the pipeline are in fact very similar. Standard 
+input and standard output is used for configuration of Portash. Reference files 
+have to be made available for input and output is stored on the filesystem at 
+completion.
+
+Please note that the way to run this workflow is slightly different from the 
+one in hte original pipeline (see below). In the original one, Nextflow is used 
+to map the appropriate data volume (whole `home` directory). This ensures that 
+the data is mapped automagically during a pipeline run and works for local and 
+Docker runs. But it does not work for Kubernetes runs, for instance. We start 
+from the idea that the user should put (reference) data in a directory and that 
+this directory should be mapped to the container. This is consistent with the 
+use of data using a _persistent volume_ and can be used in all possible 
+scenarios.
+
+There's a lot of room for improvement.
+
 # SCENIC Nextflow pipeline using containers
 
 A basic pipeline for running (py)SCENIC implemented in Nextflow.
