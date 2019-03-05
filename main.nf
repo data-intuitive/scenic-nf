@@ -1,5 +1,7 @@
 #!/usr/bin/env nextflow
 
+ISDRY = true
+
 /*
    Extend the DataflowQueue class with a `log` method for easier logging
 */
@@ -26,40 +28,39 @@ def log(str) {
 
 // channel for SCENIC databases resources:
 featherDB = Channel
-    .fromPath( params.db )
+    .fromPath( params.reference.db )
     .collect() // use all files together in the ctx command
 
-n = Channel.fromPath(params.db).count().get()
-  if( n==1 ) {
+n = Channel.fromPath(params.reference.db).count().get()
+if( n==1 ) {
     println( """*** WARNING: only using a single feather database: ${featherDB.get()[0]}.
-        |To include all database files using pattern matching, make sure the value for the
-        |'--db' parameter is enclosed in quotes!
-        """.stripMargin().stripIndent())
-  } else {
+            |To include all database files using pattern matching, make sure the value for the
+            |'--db' parameter is enclosed in quotes!
+            """.stripMargin().stripIndent())
+} else {
     println( "*** Using $n feather databases: ***")
       featherDB.get().each {
         println "  ${it}"
       }
-  }
+}
 
-expr = file(params.expr)
-tfs = file(params.TFs)
-motifs = file(params.motifs)
-exprMat = file(params.expr)
+/*
+    GRN Inference
+*/
 
-GRN_input = Channel.from("""
+GRN_std_input = Channel.from("""
             function:
                 name: GRNinference
                 command: pyscenic
                 arguments:
                     - grn
-                    - ${params.expr}
-                    - ${params.TFs}
+                    - ${params.input.expr_loom}
+                    - ${params.reference.TFs}
                 parameters:
                     - name: num_workers
-                      value: ${params.threads}
+                      value: ${params.config.threads}
                     - name: method
-                      value: ${params.grn}
+                      value: ${params.config.grn}
                     - name: cell_id_attribute
                       value: ${params.loom.cell_id_attribute}
                     - name: gene_attribute
@@ -69,18 +70,26 @@ GRN_input = Channel.from("""
             """.stripIndent()
 ).log("Input for GRNinference")
 
+GRN_input = file("${params.input.expr_loom}")
+
+GRN_dry = ISDRY ? "dry-run | tee adj.tsv" : ""
+
 process GRNinference {
 
+    container 'tverbeiren/pyscenic'
+
+    // publishDir "${params.output.dir}", mode: 'copy', overwrite: false
+
     input:
-    stdin GRN_input
-    /* input files can be listed individually as well */
+    stdin GRN_std_input
+    // file GRN_input
 
     output:
     stdout into GRN_output
     file 'adj.tsv' into GRN
 
     """
-    porta.sh
+    porta.sh $GRN_dry
     """
 
 }
@@ -88,14 +97,8 @@ process GRNinference {
 GRN_output = GRN_output
               .log("Output from GRNinference")
 
-/* *** Example of parsing YAML ***
-import org.yaml.snakeyaml.Yaml
-Yaml yaml = new Yaml()
-
-GRN_output.map{ 
-    def obj = yaml.load(it)
-    println("Function: " + obj.function)
-}.log("transformed YAML")
+/*
+    i-cis Target
 */
 
 cisTarget_input = Channel.from("""
@@ -105,14 +108,14 @@ cisTarget_input = Channel.from("""
                 arguments:
                     - ctx
                     - adj.tsv
-                    - ${params.db}
+                    - ${params.reference.db}
                 parameters:
                     - name: num_workers
-                      value: ${params.threads}
+                      value: ${params.config.threads}
                     - name: annotations_fname
-                      value: ${params.motifs}
+                      value: ${params.reference.motifs}
                     - name: expression_mtx_fname
-                      value: ${params.expr}
+                      value: ${params.input.expr_loom}
                     - name: mode
                       value: dask_multiprocessing
                     - name: cell_id_attribute
@@ -124,7 +127,11 @@ cisTarget_input = Channel.from("""
             """.stripIndent()
 ).log("cisTarget input")
 
+cisTarget_dry = ISDRY ? "dry-run | tee reg.csv" : ""
+
 process i_cisTarget {
+
+    container 'tverbeiren/pyscenic'
 
     input:
     stdin cisTarget_input
@@ -135,12 +142,17 @@ process i_cisTarget {
     file 'reg.csv' into regulons
 
     """
-    porta.sh
+    porta.sh $cisTarget_dry
     """
 }
 
 cisTarget_output = cisTarget_output
                     .log("Output cisTarget")
+
+
+/*
+    AUCell
+*/
 
 AUCell_input = Channel.from("""
             function:
@@ -148,11 +160,11 @@ AUCell_input = Channel.from("""
                 command: pyscenic
                 arguments:
                     - aucell
-                    - ${params.expr_loom}
+                    - ${params.input.expr_loom}
                     - reg.csv
                 parameters:
                     - name: num_workers
-                      value: ${params.threads}
+                      value: ${params.config.threads}
                     - name: cell_id_attribute
                       value: ${params.loom.cell_id_attribute}
                     - name: gene_attribute
@@ -162,7 +174,11 @@ AUCell_input = Channel.from("""
             """.stripIndent()
         ).log("AUCell input")
 
+AUCell_dry = ISDRY ? "dry-run | tee auc.loom" : ""
+
 process AUCell {
+
+    container 'tverbeiren/pyscenic'
 
     input:
     stdin AUCell_input
@@ -173,14 +189,55 @@ process AUCell {
     file 'auc.loom' into AUCmat
 
     """
-    porta.sh
+    porta.sh $AUCell_dry
     """
 }
 
-AUCmat.last().collectFile(storeDir:"${params.output}")
-
 AUCell_output = AUCell_output
               .log("Output from AUCell")
+
+/*
+    filter
+*/
+
+filter_input = Channel.from("""
+        function:
+            name: filter
+            pre-hook: ls -al .
+            command: python3 /home/app/code/filter.py
+            parameters:
+                - name: input-file
+                  value: auc.loom
+                - name: meta-data
+                  value: ${params.filter.metadata}
+                - name: output-file
+                  value: output-filter.loom
+            """.stripIndent()
+        ).log("filter input")
+
+filter_dry = ISDRY ? "dry-run | tee ${params.filter.output}" : ""
+
+process filter {
+
+    container 'filter'
+
+    input:
+    stdin filter_input
+    file 'auc.loom' from AUCmat
+
+    output:
+    stdout into filter_output
+    file "output-filter.loom" into filterOut
+
+    """
+    porta.sh 
+    """
+}
+
+filter_output = filter_output
+              .log("Output from filter")
+
+filterOut.last().collectFile(storeDir:"${params.output.file}")
 
 workflow.onComplete {
   // Display complete message

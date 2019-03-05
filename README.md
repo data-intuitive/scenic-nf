@@ -11,7 +11,7 @@ have to be made available for input and output is stored on the filesystem at
 completion.
 
 Please note that the way to run this workflow is slightly different from the 
-one in hte original pipeline (see below). In the original one, Nextflow is used 
+one in the original pipeline (see below). In the original one, Nextflow is used 
 to map the appropriate data volume (whole `home` directory). This ensures that 
 the data is mapped automagically during a pipeline run and works for local and 
 Docker runs. But it does not work for Kubernetes runs, for instance. We start 
@@ -20,7 +20,31 @@ this directory should be mapped to the container. This is consistent with the
 use of data using a _persistent volume_ and can be used in all possible 
 scenarios.
 
-There's a lot of room for improvement.
+The rationale is as follows:
+
+- Reference data in the container/process is under `/refdata`.
+- Other data resides in its _personal_ directory `/data/<analysisID>`
+
+In my case, I have the following setup under `/data/` on my laptop:
+
+```
+$ exa -T data refdata
+data
+└── my_analysis
+   └── expr_mat.loom
+refdata
+├── allTFs_hg38.txt
+├── genome-ranking.feather
+├── hg19-500bp-upstream-10species.mc8nr.feather
+├── motifs-v9-nr.hgnc-m0.001-o0.0.tbl
+└── motifs.tbl
+```
+
+In a future version of this workflow, I would prefer the reference data to be
+downloaded automatically. At a minimum, a check should occur that all files are
+present before actually starting the pipeline.
+
+Note: There's a lot of room for improvement.
 
 # SCENIC Nextflow pipeline using containers
 
